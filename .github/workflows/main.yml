@@ -1,28 +1,84 @@
-name: Ubuntu VNC
+name: Windows RDP via Ngrok
 
-on: [workflow_dispatch]
+on: [push]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install Desktop Environment & VNC
-        run: |
-          sudo apt update
-          sudo apt install xfce4 xfce4-goodies tightvncserver git -y
-          vncserver :1
-          vncserver -kill :1
-          mkdir -p ~/.vnc
-          echo "#!/bin/bash
-          xrdb $HOME/.Xresources
-          startxfce4 &" > ~/.vnc/xstartup
-          chmod +x ~/.vnc/xstartup
-          vncserver :1 -geometry 1280x720 -depth 24
+  rdp-setup:
+    runs-on: windows-latest
+    timeout-minutes: 360  # 6 hour max (GitHub Free limit)
 
-      - name: Setup noVNC Server
-        run: |
-          git clone https://github.com/novnc/noVNC.git ~/noVNC
-          git clone https://github.com/novnc/websockify ~/noVNC/utils/websockify
-          nohup ~/noVNC/utils/launch.sh --vnc localhost:5901 --listen 6080 &
-          sleep 10
-          nohup ssh -o StrictHostKeyChecking=no -R 80:localhost:6080 serveo.net &
+    steps:
+    - name: Download and extract Ngrok
+      run: |
+        Invoke-WebRequest "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-windows-amd64.zip" -OutFile ngrok.zip
+        Expand-Archive ngrok.zip -DestinationPath .
+        Remove-Item ngrok.zip -Force
+
+    - name: Authenticate Ngrok
+      run: .\ngrok.exe authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+
+    - name: Enable Remote Desktop
+      run: |
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        New-NetFirewallRule -DisplayName "Allow RDP via Ngrok" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389
+
+    - name: Create RDP User
+      run: |
+        net user kamel007 kamel007 /add /Y
+        net localgroup administrators kamel007 /add
+        reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList" /v kamel007 /t REG_DWORD /d 0 /f
+
+    - name: Start Ngrok and display connection info
+      run: |
+        # Start Ngrok and capture output
+        Start-Process -FilePath "$pwd\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout" -NoNewWindow -RedirectStandardOutput ngrok.log
+        
+        # Wait for tunnel establishment
+        $timeout = 60
+        $tunnelUrl = $null
+        
+        while ($timeout -gt 0 -and -not $tunnelUrl) {
+          Start-Sleep -Seconds 5
+          $timeout -= 5
+          
+          # Try API first
+          try {
+            $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction Stop
+            $tunnelUrl = $response.tunnels[0].public_url -replace "tcp://", ""
+          } catch {
+            # Fallback to log parsing
+            $logContent = Get-Content ngrok.log -ErrorAction SilentlyContinue
+            $tunnelUrl = $logContent | Select-String -Pattern "tcp://([a-zA-Z0-9\.\-]+:\d+)" | ForEach-Object { $_.Matches.Groups[1].Value }
+          }
+        }
+
+        if (-not $tunnelUrl) {
+          Write-Output "::error::Failed to establish Ngrok tunnel after 60 seconds"
+          Write-Output "=== Ngrok Log Contents ==="
+          Get-Content ngrok.log
+          exit 1
+        }
+
+        Write-Output "=========================================="
+        Write-Output "||        RDP CONNECTION DETAILS        ||"
+        Write-Output "=========================================="
+        Write-Output "Address: $tunnelUrl"
+        Write-Output "Username: kamel007"
+        Write-Output "Password: kamel007"
+        Write-Output "------------------------------------------"
+        Write-Output "1. Open Remote Desktop (Win+R → mstsc)"
+        Write-Output "2. Connect to: $tunnelUrl"
+        Write-Output "3. Use credentials above when prompted"
+        Write-Output "=========================================="
+        Write-Output "Note: This VM will self-destruct after 6 hours"
+        Write-Output "=========================================="
+
+        # Keep alive
+        while ($true) { Start-Sleep -Seconds 300 }
+
+    - name: Force cleanup
+      if: always()
+      run: |
+        Stop-Process -Name "ngrok" -Force -ErrorAction SilentlyContinue
+        Stop-Process -Name "rdp" -Force -ErrorAction SilentlyContinue
