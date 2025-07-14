@@ -1,39 +1,21 @@
-name: programmingwithkumaresan
-
-
+name: Windows - Litemanager
 
 on:
-
   workflow_dispatch:
 
-
-
 jobs:
-
   build:
-
-    name: Start Building...
-
+    name: Start Building
     runs-on: windows-latest
 
     steps:
-
-      - name: Downloading & Installing Essentials
-
+      - name: Downloading & installing Essentials
         run: |
-
-          Invoke-WebRequest -Uri "https://www.dropbox.com/scl/fi/qdyd4p9t6xoabl95n5o3g/Downloads.bat?rlkey=snr74vv1vr8k5suujugvrhjtm&dl=1" -OutFile "Downloads.bat"
-
+          Invoke-WebRequest -Uri "https://gitlab.com/chamod12/lm_win-10_github_rdp/-/raw/main/Downloads.bat" -OutFile "Downloads.bat"
           cmd /c Downloads.bat
 
-
-
-      - name: Log In To AnyDesk
-
+      - name: Connect to LiteManager
         run: cmd /c show.bat
 
-
-
       - name: Time Counter
-
-        run: python time.py
+        run: cmd /c loop.bat
